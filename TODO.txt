@@ -1,0 +1,79 @@
+
+
+### Core Idea
+
+1. For each segment, compute the **average HSV** value across its pixels.
+2. Measure the **distance** to the sampled HSV (e.g., Euclidean or weighted HSV delta).
+3. Rank all segments by distance.
+4. Keep the top `X` percentile (e.g., 10%, 20%).
+
+---
+
+### Modified `filter_segments_by_percentile()` Function
+
+Here’s a rewritten version of your `filter_segments()` that implements this percentile-based filtering:
+
+```python
+def filter_segments_by_percentile(image, segments, target_hsv, keep_percentile=10):
+    """
+    Keeps only the top N% of segments closest to the target HSV value.
+    """
+    labels = label(segments)
+    props = regionprops(labels)
+    hsv = rgb2hsv(image)
+    
+    segment_distances = []
+
+    for prop in props:
+        mask = labels == prop.label
+        h = hsv[:, :, 0][mask]
+        s = hsv[:, :, 1][mask]
+        v = hsv[:, :, 2][mask]
+        
+        # Mean HSV of the segment
+        mean_h = h.mean()
+        mean_s = s.mean()
+        mean_v = v.mean()
+
+        # Hue difference (circular)
+        hue_diff = np.minimum(abs(mean_h - target_hsv[0]), 1 - abs(mean_h - target_hsv[0]))
+        dist = np.sqrt(hue_diff**2 + (mean_s - target_hsv[1])**2 + (mean_v - target_hsv[2])**2)
+
+        segment_distances.append((prop.label, dist))
+    
+    # Sort by distance and keep top X%
+    segment_distances.sort(key=lambda x: x[1])
+    keep_count = max(1, int(len(segment_distances) * (keep_percentile / 100)))
+    kept_labels = [label for label, _ in segment_distances[:keep_count]]
+    
+    mask = np.isin(labels, kept_labels)
+    return mask * segments
+```
+
+---
+
+### How to Use It
+
+In your main pipeline, replace the old `filter_segments()` call with:
+
+```python
+new_segments = filter_segments_by_percentile(
+    image_rgb, segments,
+    target_hsv=target_hsv,
+    keep_percentile=10  # Top 10% closest in color
+)
+```
+
+You can adjust `keep_percentile` (e.g., 5, 10, 20) depending on how selective you want to be.
+
+---
+
+## Notes
+
+* This removes hard thresholds for eccentricity, brightness, etc. — you can still reintroduce them later **after** this HSV filtering step if needed.
+* The hue comparison accounts for wraparound at 0/1.
+* It's robust to varying glitter shapes and better reflects perceptual similarity.
+
+---
+
+Let me know if you'd like to combine this with additional size or shape filtering later. This change alone should give you **more consistent and meaningful segment selection** based on your target HSV!
