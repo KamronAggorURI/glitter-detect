@@ -10,6 +10,16 @@ import os
 import glob
 
 def hypersegmentation(img, method='felzenszwalb', **kwargs):
+    """
+    Perform hypersegmentation on an image using specified method.
+    
+    Parameters:
+    - img: Input image (numpy array).
+    - method: Segmentation method to use ('felzenszwalb' or 'slic').
+    - kwargs: Additional parameters for the segmentation method.
+    
+    Returns:
+    - segments: Segmented image as a numpy array."""
     img_float = img_as_float(img)
     if method == 'felzenszwalb':
         segments = felzenszwalb(img_float, **kwargs)
@@ -31,6 +41,24 @@ def filter_segments(
     target_hsv=None, hsv_tolerance=(0.05, 0.3, 0.3),  # (H, S, V) tolerances in [0,1]
     max_eccentricity=0.60, min_color_fraction=0.5
 ):
+
+    """
+    Filter segments based on area, aspect ratio, brightness, color, and eccentricity.
+    Parameters:
+    - image: Input image (numpy array).
+    - segments: Segmented image (numpy array).
+    - min_area: Minimum area of segments to keep.
+    - aspect_range: Tuple (min, max) aspect ratio to keep.
+    - min_brightness: Minimum brightness of segments to keep.
+    - max_brightness: Maximum brightness of segments to keep.
+    - target_hsv: Target HSV color to filter segments (tuple of (H, S, V) in [0,1]).
+    - hsv_tolerance: Tuple of tolerances for (H, S, V) in [0,1].
+    - max_eccentricity: Maximum eccentricity of segments to keep.
+    - min_color_fraction: Minimum fraction of color pixels in the segment to keep.
+    
+    Returns:
+    - mask: Bool-type mask of segments that have fulfilled the specified criteria.
+    """
     labels = label(segments)
     props = regionprops(labels)
     mask = np.zeros_like(segments, dtype=bool)
