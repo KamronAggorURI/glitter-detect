@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from skimage.filters import sobel
 from skimage.segmentation import felzenszwalb, slic, mark_boundaries
 from skimage.util import img_as_float
-from skimage.color import rgb2gray, label2rgb, rgb2hsv
+from skimage.color import rgb2gray, label2rgb, rgb2hsv, hsv2rgb
 from skimage.measure import regionprops, label
 from skimage.morphology import remove_small_objects, binary_opening, disk
 import os
@@ -38,32 +38,13 @@ def hsv_deg_to_unit(h, s, v):
 def filter_segments(
     image, segments, min_area=10, aspect_range=(0.2, 5.0),
     min_brightness=0.00, max_brightness=1.00,
-    target_hsv=None, hsv_tolerance=(0.05, 0.3, 0.3),  # (H, S, V) tolerances in [0,1]
-    max_eccentricity=0.60, min_color_fraction=0.5
+    target_rgb=None, rgb_tolerance=0.25,  # Euclidean distance in RGB [0,1]
+    max_eccentricity=0.60, min_color_fraction=0
 ):
-
-    """
-    Filter segments based on area, aspect ratio, brightness, color, and eccentricity.
-    Parameters:
-    - image: Input image (numpy array).
-    - segments: Segmented image (numpy array).
-    - min_area: Minimum area of segments to keep.
-    - aspect_range: Tuple (min, max) aspect ratio to keep.
-    - min_brightness: Minimum brightness of segments to keep.
-    - max_brightness: Maximum brightness of segments to keep.
-    - target_hsv: Target HSV color to filter segments (tuple of (H, S, V) in [0,1]).
-    - hsv_tolerance: Tuple of tolerances for (H, S, V) in [0,1].
-    - max_eccentricity: Maximum eccentricity of segments to keep.
-    - min_color_fraction: Minimum fraction of color pixels in the segment to keep.
-    
-    Returns:
-    - mask: Bool-type mask of segments that have fulfilled the specified criteria.
-    """
     labels = label(segments)
     props = regionprops(labels)
     mask = np.zeros_like(segments, dtype=bool)
     gray = rgb2gray(image)
-    hsv = rgb2hsv(image)
 
     valid_indices = []
     for prop in props:
@@ -74,30 +55,12 @@ def filter_segments(
         mean_brightness = gray[segment_mask].mean()
         eccentricity = prop.eccentricity
 
-        # Color filtering
-        if target_hsv is not None:
-            h, s, v = hsv[:, :, 0][segment_mask], hsv[:, :, 1][segment_mask], hsv[:, :, 2][segment_mask]
-            h0, s0, v0 = target_hsv
-            dh, ds, dv = hsv_tolerance
-
-            # Allow matches based on proximity to target even if just a part of the segment
-            hue_dist = np.minimum(np.abs(h - h0), 1 - np.abs(h - h0))
-            color_pixels = (
-            (hue_dist <= dh) &
-            (s >= s0 - ds) &
-            (v >= v0 - dv)
-            )
-            # Calculate the fraction of color pixels in the segment
-            color_fraction = color_pixels.sum() / h.size
-
-            # Handle hue wraparound
-            hue_dist = np.minimum(np.abs(h - h0), 1 - np.abs(h - h0))
-            color_pixels = (
-                (hue_dist <= dh) &
-                (np.abs(s - s0) <= ds) &
-                (np.abs(v - v0) <= dv)
-            )
-            color_fraction = color_pixels.sum() / h.size
+        # Color filtering in RGB
+        if target_rgb is not None:
+            rgb_pixels = image[segment_mask]
+            dists = np.linalg.norm(rgb_pixels - target_rgb, axis=1)
+            color_pixels = (dists <= rgb_tolerance)
+            color_fraction = color_pixels.sum() / rgb_pixels.shape[0]
         else:
             color_fraction = 1.0
 
@@ -187,6 +150,46 @@ def sample_hsv(image):
         return 0.0, 0.0, 0.0
     
 
+def saturate_image(image, saturation_factor=1.5):
+    """
+    Increase the saturation of an image.
+    Parameters:
+    - image: Input image (numpy array).
+    - saturation_factor: Factor by which to increase saturation.
+    
+    Returns:
+    - Saturated image (numpy array).
+    """
+    hsv = rgb2hsv(image)
+    hsv[..., 1] *= saturation_factor
+    hsv[..., 1] = np.clip(hsv[..., 1], 0, 1)  # Ensure S is in [0, 1]
+    hsv = hsv2rgb(hsv)
+    return hsv
+
+def sample_rgb(image):
+    """
+    Display an image and let the user click a point to sample its RGB value.
+    Returns RGB in unit scale (0-1, 0-1, 0-1).
+    """
+    plt.figure(figsize=(8, 8))
+    plt.imshow(image)
+    plt.title("Click a pixel to sample RGB")
+    plt.axis('off')
+    plt.tight_layout()
+
+    points = plt.ginput(1, timeout=0, show_clicks=True)
+    if points:
+        x, y = int(points[0][0]), int(points[0][1])
+        rgb = image[y, x]
+        print(f'R={rgb[0]:.2f}, G={rgb[1]:.2f}, B={rgb[2]:.2f} (unit scale)')
+        plt.show()
+        return rgb
+    else:
+        print("No point selected.")
+        plt.show()
+        return np.array([0.0, 0.0, 0.0])
+
+
 # --------- main --------
 
 image_extensions = ["**/*.png", "**/*.jpg", "**/*.jpeg"]
@@ -210,23 +213,29 @@ for idx, image_path in enumerate(image_paths, 1):
     if len(image_rgb.shape) == 2:  # Grayscale
         image_rgb = np.stack((image_rgb,) * 3, axis=-1)
 
-    h, s, v = sample_hsv(image_rgb)  # Sample HSV value from the image
+    # Saturate the image
+    image_rgb = saturate_image(image_rgb, saturation_factor=1.5)
+    print(f"Image shape: {image_rgb.shape}, dtype: {image_rgb.dtype}")
+    print(f"Image RGB range: {image_rgb.min():.2f} - {image_rgb.max():.2f}")
+
+    # h, s, v = sample_hsv(image_rgb)  # Sample HSV value from the image
+
+    target_rgb = sample_rgb(image_rgb)  # Sample RGB value from the image
 
     segments = hypersegmentation(
         image_rgb,
-        method='felzenszwalb', # Change to 'slic' if needed
-        scale=3,  # Scale parameter for Felzenszwalb
-        sigma=0.5, # Sigma for Gaussian smoothing
-        min_size=30 # Minimum segment size
+        method='felzenszwalb',
+        scale=3,
+        sigma=0.5,
+        min_size=21
     )
-    target_hsv = hsv_deg_to_unit(h, s, v)
     new_segments = filter_segments(
         image_rgb, segments,
-        target_hsv=target_hsv,  # Orange hue range
-        hsv_tolerance=(0.15, 0.5, 0.5),  # Tolerances for H, S, V
-        min_area=5,  # Minimum area of segments
-        max_eccentricity=.95,  # Maximum eccentricity of segments
-        min_color_fraction=0.05,  # Minimum fraction of color pixels
+        target_rgb=target_rgb,      # Use sampled RGB
+        rgb_tolerance=0.20,         # Adjust as needed (0.0-1.0)
+        min_area=21,
+        max_eccentricity=.90,
+        min_color_fraction=0.10,
     )
 
     print("Unique segment labels in new_segments:", np.unique(new_segments))
